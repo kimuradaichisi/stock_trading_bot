@@ -36,6 +36,7 @@ def main():
 
     # 全期間の生データを一度取得・更新 (後でウォークフォワード用に分割)
     # config.START_DATE と config.END_DATE を使って全期間のデータを取得
+    print(f"データ取得期間: {START_DATE} から {END_DATE}")
     raw_dfs = data_manager.fetch_multiple_data_from_yfinance(
         TICKER_SYMBOLS, START_DATE, END_DATE
     )
@@ -43,11 +44,6 @@ def main():
     if not raw_dfs:
         print("データ取得に失敗しました。終了します。")
         return
-
-    # ウォークフォワードシミュレーションの結果を保存するためのリスト
-    all_walk_forward_results = []  # 各テスト期間のサマリー結果
-    all_walk_forward_trades = pd.DataFrame()  # 全期間の統合された取引履歴
-    all_walk_forward_portfolio_dfs = []  # 各テスト期間のポートフォリオ推移DF
 
     # 最初の最適化開始日を決定
     # 最も古いデータがある銘柄の最初のOPTIMIZATION_WINDOW_DAYS分のデータが必要
@@ -59,27 +55,41 @@ def main():
         print("有効なデータが見つかりませんでした。終了します。")
         return
 
-    min_date = min(df["Date"].min() for df in valid_dfs_for_min_max_date)
-    max_date = max(df["Date"].max() for df in valid_dfs_for_min_max_date)
+    # データフレームのインデックス (Date) から最小値と最大値を取得
+    min_date = min(df.index.min() for df in valid_dfs_for_min_max_date)
+    max_date = max(df.index.max() for df in valid_dfs_for_min_max_date)
+    print(
+        f"全銘柄のデータ最小日: {min_date.strftime('%Y-%m-%d')}, 最大日: {max_date.strftime('%Y-%m-%d')}"
+    )
 
     current_optimization_start_date = min_date
+
+    # ウォークフォワードシミュレーションの結果を保存するためのリスト
+    # ★ここから追加/修正★
+    all_walk_forward_results = []  # 各テスト期間のサマリー結果
+    all_walk_forward_trades = pd.DataFrame()  # 全期間の統合された取引履歴
+    all_walk_forward_portfolio_dfs = []  # 各テスト期間のポートフォリオ推移DF
+    # ★ここまで追加/修正★
 
     # ウォークフォワードループ
     while True:
         # ウォークフォワードのウィンドウを定義
+        # 最適化期間の終了日は、開始日 + OPTIMIZATION_WINDOW_DAYS
         optimization_end_date = current_optimization_start_date + timedelta(
             days=OPTIMIZATION_WINDOW_DAYS
         )
-        test_start_date = (
-            optimization_end_date  # テスト期間の開始日は最適化期間の終了日
-        )
+        # テスト期間の開始日は最適化期間の「次の日」
+        test_start_date = optimization_end_date + timedelta(days=1)
+        # テスト期間の終了日は、テスト期間の開始日 + TEST_WINDOW_DAYS
         test_end_date = test_start_date + timedelta(days=TEST_WINDOW_DAYS)
 
         # テスト期間が全データ期間を超過したら終了
         # データがない期間で最適化・テストを試みないようにする
         if (
-            optimization_end_date > max_date or test_start_date >= test_end_date
-        ):  # テスト期間が有効かどうかもチェック
+            optimization_end_date > max_date
+            or test_start_date >= test_end_date
+            or test_start_date > max_date
+        ):
             print("\nウォークフォワード最適化が全データ期間をカバーしました。")
             break
 
@@ -95,22 +105,45 @@ def main():
         current_processed_dfs_for_test = {}
 
         # 生データに対して一度MA/RSIを計算し、それを期間で区切る
-        # これにより、最適化・テスト期間ごとに再度MA/RSIを計算する二重計算を防ぐ
+        # ここで `full_processed_dfs` は、各銘柄の全期間に対して指標を計算したものを一時的に保持
         full_processed_dfs = {}
         for ticker, df in raw_dfs.items():
             if df is None or df.empty:
+                print(
+                    f"警告: {ticker} の生データが空またはNoneです。この銘柄の処理をスキップします。"
+                )
                 continue
 
-            df_ma = data_manager.calculate_moving_averages(df.copy())
-            if df_ma is None:
+            df_copy = df.copy()
+            # MA/RSI計算はインデックスベースで行われる
+            print(
+                f"--- {ticker} 全期間データ（MA計算前）のサイズ: {len(df_copy)}, 列: {df_copy.columns.tolist()} ---"
+            )
+            df_ma = data_manager.calculate_moving_averages(df_copy)
+            if df_ma is None:  # calculate_moving_averagesがNoneを返す場合
+                print(
+                    f"!! 致命的警告: {ticker} の全期間MA計算が失敗し、Noneが返されました。この銘柄をスキップします。"
+                )
                 continue
+
+            print(
+                f"--- {ticker} 全期間データ（MA計算後）のサイズ: {len(df_ma)}, 列: {df_ma.columns.tolist()} ---"
+            )
             df_final = data_manager.calculate_rsi(df_ma)
-            if df_final is None:
+            if df_final is None:  # calculate_rsiがNoneを返す場合
+                print(
+                    f"!! 致命的警告: {ticker} の全期間RSI計算が失敗し、Noneが返されました。この銘柄をスキップします。"
+                )
                 continue
 
-            # シグナル生成は、最適化後のパラメータでテスト期間に対してのみ実行するため、ここでは保留
+            # strategy_manager が 'Date' 列を必要とするため、ここでインデックスをリセット
+            df_final.reset_index(inplace=True)
             full_processed_dfs[ticker] = df_final
+            print(
+                f"--- {ticker} 全期間データ（最終処理後）のサイズ: {len(df_final)}, 列: {df_final.columns.tolist()} ---"
+            )
 
+        # 全期間の処理済みデータから、現在のウォークフォワード期間にスライスする
         for ticker, df_full_processed in full_processed_dfs.items():
             # 最適化期間のデータ
             opt_df = df_full_processed[
@@ -119,6 +152,10 @@ def main():
             ].copy()
             if not opt_df.empty:
                 current_processed_dfs_for_optimization[ticker] = opt_df
+            else:
+                print(
+                    f"警告: {ticker} の最適化期間 [{current_optimization_start_date.strftime('%Y-%m-%d')} - {optimization_end_date.strftime('%Y-%m-%d')}] のデータが空です。"
+                )
 
             # テスト期間のデータ
             test_df = df_full_processed[
@@ -127,28 +164,26 @@ def main():
             ].copy()
             if not test_df.empty:
                 current_processed_dfs_for_test[ticker] = test_df
+            else:
+                print(
+                    f"警告: {ticker} のテスト期間 [{test_start_date.strftime('%Y-%m-%d')} - {test_end_date.strftime('%Y-%m-%d')}] のデータが空です。"
+                )
 
-        if (
-            not current_processed_dfs_for_optimization
-            or not current_processed_dfs_for_test
-        ):
+        if not current_processed_dfs_for_optimization:
             print(
-                "この期間の最適化またはテストデータが不足しています。次の期間へスキップします。"
+                "最適化期間のデータが不足しているため、このウォークフォワード期間をスキップします。"
             )
             current_optimization_start_date += timedelta(days=WALK_FORWARD_STEP_DAYS)
             continue
 
         # 最も有望な銘柄のデータを取得 (ここでは最適化期間の代表銘柄として最初の銘柄を使用)
-        # より高度な戦略では、この期間で最もパフォーマンスが良かった銘柄を選ぶ、等の工夫が必要
+        # current_processed_dfs_for_optimization が空でないことは上で確認済み
         optimization_ticker = list(current_processed_dfs_for_optimization.keys())[0]
         df_for_optimization = current_processed_dfs_for_optimization[
             optimization_ticker
         ]
 
         # 1. パラメータ最適化 (最適化期間のデータを使用)
-        # strategy_manager.optimize_strategy_parameters はあくまで簡易的なもの。
-        # 本格的なバックテストロジック（バックテスタークラス）を呼び出して
-        # 最適化を実行するような構造にするべきですが、ここでは簡略化しています。
         best_params = strategy_manager.optimize_strategy_parameters(df_for_optimization)
 
         if not best_params:
@@ -165,21 +200,60 @@ def main():
         # 必要なら RSI_OVERBOUGHT, RSI_OVERSOLD も同様に設定
 
         processed_dfs_for_test_with_optimized_params = {}
-        for ticker, df_test_raw in current_processed_dfs_for_test.items():
-            # テスト期間のデータに、最適化されたパラメータでMAとRSIを再計算 (config変更後の値で)
-            # 再計算は不要な場合があるが、パラメータ変更を反映させるために行っている
-            # 既にfull_processed_dfsで計算済みだが、その時点のconfig値なので、ここで再計算が必要
-            df_test_ma = data_manager.calculate_moving_averages(df_test_raw.copy())
-            if df_test_ma is None:
-                continue
-            df_test_final = data_manager.calculate_rsi(df_test_ma)
-            if df_test_final is None:
+        for (
+            ticker,
+            df_test_raw_current_period,
+        ) in current_processed_dfs_for_test.items():
+            # df_test_raw_current_period はすでにMA/RSIが計算済みだが、
+            # configのMA期間が変更されたので、シグナル生成のために再計算が必要
+
+            # raw_dfsからテスト期間の生データを抽出
+            # raw_dfsのDFはインデックスがDateになっているので、.indexでアクセス
+            raw_test_data = raw_dfs[ticker][
+                (raw_dfs[ticker].index >= test_start_date)
+                & (raw_dfs[ticker].index < test_end_date)
+            ].copy()
+
+            if raw_test_data.empty:
+                print(
+                    f"警告: {ticker} の生データ（テスト期間）が空です。シグナル生成をスキップします。"
+                )
                 continue
 
-            # 最適化されたパラメータを反映したシグナルを生成
-            df_test_signals = strategy_manager.generate_trading_signals(df_test_final)
-            if df_test_signals is None:
+            # 再計算: 最適化されたconfig値を使ってMA/RSIを計算
+            print(
+                f"--- {ticker} テスト期間データ（MA再計算前）のサイズ: {len(raw_test_data)}, 列: {raw_test_data.columns.tolist()} ---"
+            )
+            df_recalculated_ma = data_manager.calculate_moving_averages(raw_test_data)
+            if df_recalculated_ma is None:  # calculate_moving_averagesがNoneを返す場合
+                print(
+                    f"!! 致命的警告: {ticker} のテスト期間のMA再計算に失敗し、Noneが返されました。スキップします。"
+                )
                 continue
+
+            print(
+                f"--- {ticker} テスト期間データ（MA再計算後）のサイズ: {len(df_recalculated_ma)}, 列: {df_recalculated_ma.columns.tolist()} ---"
+            )
+            df_recalculated_final = data_manager.calculate_rsi(df_recalculated_ma)
+            if df_recalculated_final is None:  # calculate_rsiがNoneを返す場合
+                print(
+                    f"!! 致命的警告: {ticker} のテスト期間のRSI再計算に失敗し、Noneが返されました。スキップします。"
+                )
+                continue
+
+            # strategy_manager が 'Date' 列を必要とするため、ここでインデックスをリセット
+            df_recalculated_final.reset_index(inplace=True)
+
+            # シグナル生成
+            df_test_signals = strategy_manager.generate_trading_signals(
+                df_recalculated_final
+            )
+            if df_test_signals is None or df_test_signals.empty:
+                print(
+                    f"警告: {ticker} のテスト期間のシグナル生成に失敗しました。スキップします。"
+                )
+                continue
+
             processed_dfs_for_test_with_optimized_params[ticker] = df_test_signals
 
         if not processed_dfs_for_test_with_optimized_params:
@@ -188,8 +262,8 @@ def main():
             continue
 
         # 2. テスト期間でバックテストを実行 (最適化されたパラメータを使用)
-        # 各ウォークフォワード期間で初期資産をリセットして評価（簡易化のため）
-        # 連続バックテストを行う場合は、前期間の最終資産を current_cash に引き継ぐ必要がある
+        # processed_dfs_for_test_with_optimized_params が空でないことは上で確認済み
+
         backtester = Backtester(
             processed_dfs_for_test_with_optimized_params,
             initial_cash=INITIAL_CASH,
@@ -270,22 +344,45 @@ def main():
 
     # 統合された結果の可視化とレポート生成
     print("グラフ描画中...")
-    visualizer = Visualizer()
+    # ★ここを修正★
+    visualizer = Visualizer(
+        final_integrated_portfolio_df
+    )  # df_portfolio_history を渡す
+    # ★ここまで修正★
 
     # 基準となる銘柄のデータを取得 (参照用)
-    # 最初の銘柄の処理済みデータ（全期間）を可視化の基準とする
     reference_ticker_df = None
     if TICKER_SYMBOLS and TICKER_SYMBOLS[0] in raw_dfs:
         temp_df = raw_dfs[TICKER_SYMBOLS[0]].copy()
+
+        print(
+            f"\n--- 参照銘柄 ({TICKER_SYMBOLS[0]}) データ処理前（全期間）のサイズ: {len(temp_df)}, 列: {temp_df.columns.tolist()} ---"
+        )
+
         temp_df = data_manager.calculate_moving_averages(temp_df)
         if temp_df is not None:
+            print(
+                f"--- 参照銘柄 ({TICKER_SYMBOLS[0]}) MA計算後のサイズ: {len(temp_df)}, 列: {temp_df.columns.tolist()} ---"
+            )
+
             temp_df = data_manager.calculate_rsi(temp_df)
             if temp_df is not None:
-                # シグナルは最適化されたものではないが、グラフの基準として描画
+                print(
+                    f"--- 参照銘柄 ({TICKER_SYMBOLS[0]}) RSI計算後のサイズ: {len(temp_df)}, 列: {temp_df.columns.tolist()} ---"
+                )
+
+                temp_df.reset_index(inplace=True)
                 reference_ticker_df = strategy_manager.generate_trading_signals(temp_df)
-                # 'Ticker' 列を追加（Visualizerで利用するため）
                 if reference_ticker_df is not None:
                     reference_ticker_df["Ticker"] = TICKER_SYMBOLS[0]
+                else:
+                    print(
+                        f"警告: 参照銘柄 ({TICKER_SYMBOLS[0]}) のシグナル生成に失敗しました。"
+                    )
+            else:
+                print(f"警告: 参照銘柄 ({TICKER_SYMBOLS[0]}) のRSI計算が失敗しました。")
+        else:
+            print(f"警告: 参照銘柄 ({TICKER_SYMBOLS[0]}) のMA計算が失敗しました。")
 
     visualizer.plot_results(
         final_integrated_portfolio_df,

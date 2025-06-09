@@ -12,7 +12,9 @@ class Backtester:
         initial_cash: float = INITIAL_CASH,
         leverage_ratio: float = LEVERAGE_RATIO,
     ):
-        self.processed_dfs = processed_dfs  # 全銘柄の処理済みデータフレーム
+        self.processed_dfs = (
+            processed_dfs  # 各銘柄の処理済みデータフレーム (シグナル付き)
+        )
         self.initial_cash = initial_cash
         self.current_cash = initial_cash
         self.leverage_ratio = leverage_ratio
@@ -22,179 +24,257 @@ class Backtester:
         self.bought_price = {ticker: 0 for ticker in processed_dfs.keys()}
 
         self.portfolio_values = []  # 各日のポートフォリオ価値を記録
-        self.trade_history = []
+        self.trade_history = []  # 取引履歴を記録
 
         # 全銘柄のデータを統合した日付リスト (最も短い期間に合わせる)
         # 処理済みデータフレームが存在しない銘柄は除外
         valid_dfs = [
             df for df in processed_dfs.values() if df is not None and not df.empty
         ]
+
         if not valid_dfs:
-            self.dates = []  # 有効なデータがなければ空リスト
-            print("エラー: バックテスト可能な共通の日付範囲が見つかりません。")
+            print("エラー: バックテストのための有効なデータフレームが見つかりません。")
+            self.dates = []
             return
 
-        # 共通の日付範囲を抽出
-        common_dates = set(valid_dfs[0]["Date"].tolist())
-        for df in valid_dfs[1:]:
-            common_dates = common_dates.intersection(set(df["Date"].tolist()))
+        # 各データフレームの 'Date' 列がインデックスであることを確認し、DatetimeIndexに変換（既に変換されていることを想定しているが念のため）
+        for df in valid_dfs:
+            # main.py で df.reset_index() してから backtester に渡されるため、df['Date'] が存在し、
+            # インデックスはデフォルトの RangeIndex になっている可能性が高い
+            if "Date" not in df.columns:
+                print(
+                    "警告: バックテスター初期化: データフレームに 'Date' 列が見つかりません。"
+                )
+                # ここで処理を中断するか、エラーを発生させる
+                self.dates = []
+                return
+            df["Date"] = pd.to_datetime(df["Date"])
+            df.set_index(
+                "Date", inplace=True
+            )  # Backtester内部ではDateをインデックスにする
+            df.sort_index(inplace=True)  # インデックスでソートされていることを確認
 
-        self.dates = sorted(list(common_dates))
+        # 全ての有効なDFに存在する日付の共通集合を取得
+        if valid_dfs:
+            # インデックスの日付を正規化してセットにし、共通部分を抽出
+            common_dates_set = set(
+                valid_dfs[0].index.normalize().tolist()
+            )  # .index を使用
+            for df in valid_dfs[1:]:
+                common_dates_set = common_dates_set.intersection(
+                    set(df.index.normalize().tolist())
+                )  # .index を使用
+            self.dates = sorted(list(common_dates_set))
+        else:
+            self.dates = []
 
         if not self.dates:
             print("エラー: バックテスト可能な共通の日付範囲が見つかりません。")
             return
 
+        # ポートフォリオ履歴DataFrameを初期化
+        self.portfolio_history_df = pd.DataFrame(columns=["Date", "Portfolio_Value"])
+
+    def _get_current_portfolio_value(self, current_prices: dict) -> float:
+        """
+        現在のポートフォリオの総価値を計算します。
+        """
+        holding_value = sum(
+            self.shares_held[ticker] * current_prices.get(ticker, 0)
+            for ticker in self.shares_held
+        )
+        return self.current_cash + holding_value
+
     def run_simulation(self):
         """
-        売買シグナルに基づいて仮想取引シミュレーションを実行します。
-        複数銘柄に対応し、レバレッジを考慮します。
+        シミュレーションを実行し、ポートフォリオの推移と取引履歴を記録します。
         """
-        if not self.processed_dfs or not self.dates:
+        if not self.dates:
             print("エラー: シミュレーション実行のためのデータがありません。")
-            return None, None
+            return None, None  # Noneを返すことで、main.pyでエラーを検知させる
 
-        print("バックテスト実行中...")
+        print(
+            f"バックテスト期間: {self.dates[0].strftime('%Y-%m-%d')} から {self.dates[-1].strftime('%Y-%m-%d')}"
+        )
 
-        for i in range(len(self.dates)):
-            current_date = self.dates[i]
+        for i, current_date in enumerate(self.dates):
+            current_prices = {}
+            current_signals = {}
+            has_data_for_today = True
 
-            # その日のポートフォリオ価値を計算
-            current_portfolio_value = self.current_cash
-            for ticker, shares in self.shares_held.items():
-                if shares > 0:
-                    df = self.processed_dfs[ticker]
-                    daily_data = df[df["Date"] == current_date]
-                    if not daily_data.empty:
-                        current_portfolio_value += shares * daily_data["Close"].iloc[0]
-
-            self.portfolio_values.append(current_portfolio_value)
-
-            # シグナルチェックと取引実行
-            for ticker in self.processed_dfs.keys():
-                df = self.processed_dfs[ticker]
-                # 現在日のデータがあるかチェック (データが存在しない場合があるため)
-                daily_data = df[df["Date"] == current_date]
+            for ticker, df in self.processed_dfs.items():
+                # その日のデータをインデックス（日付）で取得
+                # current_date.normalize() は日付部分のみを比較するために使用
+                # .loc[] を使ってインデックスベースでアクセス
+                daily_data = df.loc[
+                    df.index.normalize() == current_date.normalize()
+                ]  # .index を使用
 
                 if daily_data.empty:
-                    continue  # その日のデータがなければスキップ
+                    has_data_for_today = False
+                    break
 
-                current_close = daily_data["Close"].iloc[0]
-                trade_signal = daily_data["Trade_Signal"].iloc[0]
+                current_prices[ticker] = daily_data["Close"].iloc[0]
+                current_signals[ticker] = daily_data["Trade_Signal"].iloc[0]
 
-                # 買いシグナル (Trade_Signalが1)
-                if trade_signal == 1:
-                    # ポジションがない銘柄、または現在の現金で買える場合
-                    # （今回の「半年で5倍」戦略では、全資産を最も有望な銘柄に投下するため、
-                    # 既に他の銘柄を保有している場合は買わない、という簡易ロジックにします）
-                    if (
-                        self.current_cash > (INITIAL_CASH * 0.001)
-                        and sum(self.shares_held.values()) == 0
-                    ):  # ほぼ現金が残っていて、他に保有がない場合
-                        investable_cash_with_leverage = (
-                            self.current_cash * self.leverage_ratio
-                        )
-                        shares_to_buy = int(
-                            investable_cash_with_leverage // current_close
-                        )  # intにキャスト
+            if not has_data_for_today:
+                # print(f"警告: {current_date.strftime('%Y-%m-%d')} のデータが一部銘柄で欠損しています。この日をスキップします。")
+                continue  # この日のデータが一部の銘柄で欠損している場合はスキップ
+
+            # 各銘柄に対してトレード戦略を適用
+            for ticker in self.processed_dfs.keys():
+                signal = current_signals.get(ticker, 0)
+                current_price = current_prices.get(ticker, 0)
+
+                if current_price == 0:  # 価格データがない場合はスキップ
+                    continue
+
+                if signal == 1:  # 買いシグナル
+                    # レバレッジを考慮して、現金のLEVERAGE_RATIO倍まで購入可能とみなす
+                    # ただし、実際に買えるのは現金分のみ。信用取引口座が別途必要。
+                    # ここでは、現金のLEVERAGE_RATIO倍までという「余裕」を持って購入できると仮定
+
+                    # 全銘柄が均等にレバレッジを考慮した資金を割り振る (簡易的な配分)
+                    num_tickers = len(self.processed_dfs)
+                    if num_tickers == 0:  # 銘柄がない場合はスキップ
+                        continue
+
+                    # 資金を各銘柄に均等配分（単純化のため）
+                    # 実際に使用可能な「購入枠」
+                    available_buying_power = (
+                        self.current_cash * self.leverage_ratio
+                    ) / num_tickers
+
+                    if available_buying_power > 0:
+                        # 買える株数
+                        shares_to_buy = int(available_buying_power // current_price)
 
                         if shares_to_buy > 0:
-                            self.shares_held[ticker] = shares_to_buy
-                            self.bought_price[ticker] = current_close
-                            self.current_cash -= (
-                                shares_to_buy * current_close
-                            ) / self.leverage_ratio  # 実際に減る現金
+                            # 実際の購入に必要な現金
+                            cost = shares_to_buy * current_price
+                            # 購入可能であれば、現金から支払い、保有株数を増やす
+                            if (
+                                self.current_cash >= cost
+                            ):  # 現金が不足していれば買わない
+                                self.current_cash -= cost
+                                self.shares_held[ticker] += shares_to_buy
+                                self.bought_price[ticker] = current_price  # 買値を記録
+                                self.trade_history.append(
+                                    {
+                                        "Date": current_date,
+                                        "Ticker": ticker,
+                                        "Trade_Type": "BUY",  # ★ここを修正★ "Action" -> "Trade_Type"
+                                        "Price": current_price,
+                                        "Shares": shares_to_buy,
+                                        "Cash_Left": self.current_cash,
+                                        "Portfolio_Value": self._get_current_portfolio_value(
+                                            current_prices
+                                        ),
+                                    }
+                                )
 
-                            self.trade_history.append(
-                                {
-                                    "Date": current_date,
-                                    "Ticker": ticker,
-                                    "Action": "BUY",
-                                    "Price": current_close,
-                                    "Shares": shares_to_buy,
-                                    "Cash_Remaining": self.current_cash,
-                                    "Current_Shares_in_Ticker": self.shares_held[
-                                        ticker
-                                    ],
-                                    "Portfolio_Value": current_portfolio_value,  # その日のポートフォリオ価値を記録
-                                }
-                            )
-                            # print(f"{current_date.strftime('%Y-%m-%d')}: {ticker} BUY {shares_to_buy}株 @ {current_close:.2f}円")
+                elif signal == -1:  # 売りシグナル
+                    if self.shares_held[ticker] > 0:
+                        # 全て売却
+                        revenue = self.shares_held[ticker] * current_price
+                        self.current_cash += revenue
 
-                # 売りシグナル (Trade_Signalが-1)
-                elif trade_signal == -1:
-                    if self.shares_held[ticker] > 0:  # 株を保有している場合のみ
-                        cash_from_sale = self.shares_held[ticker] * current_close
-                        self.current_cash += (
-                            cash_from_sale / self.leverage_ratio
-                        )  # レバレッジ考慮して現金に戻す
+                        # 利益計算 (簡易的)
+                        profit = (
+                            (current_price - self.bought_price[ticker])
+                            * self.shares_held[ticker]
+                            if self.bought_price[ticker] > 0
+                            else 0
+                        )
 
-                        profit_loss = (
-                            current_close - self.bought_price[ticker]
-                        ) * self.shares_held[ticker]
-
+                        self.shares_held[ticker] = 0
+                        self.bought_price[ticker] = 0  # 買値をリセット
                         self.trade_history.append(
                             {
                                 "Date": current_date,
                                 "Ticker": ticker,
-                                "Action": "SELL",
-                                "Price": current_close,
-                                "Shares": self.shares_held[ticker],
-                                "Cash_Remaining": self.current_cash,
-                                "Current_Shares_in_Ticker": 0,
-                                "Profit_Loss_on_Trade": profit_loss,
-                                "Portfolio_Value": current_portfolio_value,  # その日のポートフォリオ価値を記録
+                                "Trade_Type": "SELL",  # ★ここを修正★ "Action" -> "Trade_Type"
+                                "Price": current_price,
+                                "Shares": self.shares_held[ticker],  # 売却後の保有数
+                                "Cash_Left": self.current_cash,
+                                "Portfolio_Value": self._get_current_portfolio_value(
+                                    current_prices
+                                ),
                             }
                         )
-                        # print(f"{current_date.strftime('%Y-%m-%d')}: {ticker} SELL {self.shares_held[ticker]}株 @ {current_close:.2f}円")
-                        self.shares_held[ticker] = 0
-                        self.bought_price[ticker] = 0
 
-        # ポートフォリオ価値のSeriesを作成
-        portfolio_df = pd.DataFrame(
-            {"Date": self.dates, "Portfolio_Value": self.portfolio_values}
-        )
+            # 各日のポートフォリオ価値を記録
+            current_portfolio_value = self._get_current_portfolio_value(current_prices)
+            # ポートフォリオヒストリーDFに追加
+            self.portfolio_history_df = pd.concat(
+                [
+                    self.portfolio_history_df,
+                    # 'Date' 列を直接追加するためにDataFrameを作成
+                    pd.DataFrame(
+                        [
+                            {
+                                "Date": current_date,
+                                "Portfolio_Value": current_portfolio_value,
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
 
-        # 最終的なポートフォリオ価値を統合したデータフレームにマージ
-        first_ticker = list(self.processed_dfs.keys())[0]
-        final_df_for_plot = self.processed_dfs[first_ticker].copy()
+        # 最終日のポートフォリオ価値を更新
+        if not self.portfolio_history_df.empty:
+            final_portfolio_value = self.portfolio_history_df["Portfolio_Value"].iloc[
+                -1
+            ]
+        else:
+            final_portfolio_value = self.initial_cash
 
-        # マージ前にDate列の型を一致させることを強く推奨
-        final_df_for_plot["Date"] = pd.to_datetime(final_df_for_plot["Date"])
-        portfolio_df["Date"] = pd.to_datetime(portfolio_df["Date"])
+        # 取引履歴とポートフォリオ履歴をDataFrameに変換
+        df_trade_history = pd.DataFrame(self.trade_history)
 
-        # merge前に、final_df_for_plot と portfolio_df の日付範囲が異なる場合があるため、
-        # 共通の日付範囲で揃えるか、how='outer' などで対応することも検討
-        final_df_for_plot = pd.merge(
-            final_df_for_plot, portfolio_df, on="Date", how="left"
-        )
+        # ★ここから追加★ df_trade_historyが空の場合の処理
+        if df_trade_history.empty:
+            print(
+                "警告: 取引履歴が空です。'Trade_Type'カラムを含む取引が生成されませんでした。"
+            )
+            # Visualizerが期待するカラムを持つ空のDataFrameを作成
+            df_trade_history = pd.DataFrame(
+                columns=[
+                    "Date",
+                    "Ticker",
+                    "Trade_Type",
+                    "Price",
+                    "Shares",
+                    "Cash_Left",
+                    "Portfolio_Value",
+                ]
+            )
+        # ★ここまで追加★
 
-        # 欠損値の補間 (Weekendなどデータがない日がある場合)
-        # inplace=True を使わない推奨形式に修正
-        final_df_for_plot["Portfolio_Value"] = final_df_for_plot[
-            "Portfolio_Value"
-        ].ffill()
-        final_df_for_plot["Portfolio_Value"] = final_df_for_plot[
-            "Portfolio_Value"
-        ].bfill()
-        final_df_for_plot["Portfolio_Value"] = final_df_for_plot[
-            "Portfolio_Value"
-        ].fillna(self.initial_cash)
+        # df_portfolio_historyは、ウォークフォワード用に各期間の履歴を保持
+        # 最終的にmain.pyで連結されることを想定
 
-        print("バックテスト完了。")
-        return final_df_for_plot, pd.DataFrame(self.trade_history)
+        return self.portfolio_history_df, df_trade_history
 
-    def get_summary_results(self):
+    def get_summary_results(self) -> dict:
         """
         シミュレーションの最終結果を要約して返します。
         """
-        if not self.portfolio_values:  # ポートフォリオ価値が計算されていない場合
-            return {}
+        # 最終ポートフォリオ価値
+        if not self.portfolio_history_df.empty:
+            final_portfolio_value = self.portfolio_history_df["Portfolio_Value"].iloc[
+                -1
+            ]
+        else:
+            final_portfolio_value = self.initial_cash
 
-        final_portfolio_value = self.portfolio_values[-1]
+        # 総リターン率
         total_return_percentage = (
-            (final_portfolio_value - self.initial_cash) / self.initial_cash
-        ) * 100
+            ((final_portfolio_value - self.initial_cash) / self.initial_cash) * 100
+            if self.initial_cash != 0
+            else 0
+        )
 
         return {
             "initial_cash": self.initial_cash,

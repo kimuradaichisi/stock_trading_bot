@@ -3,137 +3,176 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from .config import LONG_MA_PERIOD, SHORT_MA_PERIOD
+from .config import LONG_MA_PERIOD, SHORT_MA_PERIOD  # これらのインポートも必要
 
 
 class Visualizer:
-    def __init__(self, df_portfolio_history: pd.DataFrame, ticker_symbol: str = None):
-        # バックテスターから返された、ポートフォリオ価値と単一銘柄のデータを統合したDataFrameを受け取る
-        self.df = df_portfolio_history.copy()
-        self.ticker_symbol = ticker_symbol  # プロット対象銘柄 (任意)
+    def __init__(self, df_portfolio_history: pd.DataFrame):
+        self.df_portfolio_history = df_portfolio_history
 
-    def plot_results(self, summary_results: dict):
+    # ▼ ここを修正 ▼
+    def plot_results(
+        self,
+        df_portfolio: pd.DataFrame,
+        df_trades: pd.DataFrame,
+        file_name: str,
+        reference_ticker_data: pd.DataFrame = None,
+    ):
+        # ▲ ここまで修正 ▲
         """
-        シミュレーション結果をグラフで可視化します。
-        ポートフォリオ価値を中心にプロットします。
+        ポートフォリオ価値の推移と取引シグナルをグラフで表示し、ファイルに保存します。
         """
-        if self.df is None or self.df.empty or "Portfolio_Value" not in self.df.columns:
-            print("エラー: 可視化するためのデータがありません。")
-            return
+        plt.style.use("seaborn-v0_8-darkgrid")  # スタイルを適用
 
-        print("グラフ描画中...")
-        plt.figure(figsize=(16, 8))  # グラフサイズを少し大きく
+        fig, axes = plt.subplots(
+            2, 1, figsize=(16, 12), gridspec_kw={"height_ratios": [2, 1]}
+        )
+        fig.suptitle("Trading Strategy Backtest Results", fontsize=18)
 
-        # --- サブプロット1: ポートフォリオ価値の推移 ---
-        ax1 = plt.subplot(2, 1, 1)  # 2行1列の1番目のサブプロット
-        ax1.plot(
-            self.df["Date"],
-            self.df["Portfolio_Value"],
+        # 1. ポートフォリオ価値の推移
+        axes[0].plot(
+            df_portfolio["Date"],
+            df_portfolio["Portfolio_Value"],
             label="Portfolio Value (Strategy)",
             color="green",
             linewidth=2,
         )
-        ax1.axhline(
-            y=summary_results["initial_cash"],
-            color="gray",
+        axes[0].axhline(
+            y=df_portfolio["Portfolio_Value"].iloc[0],
+            color="lightgray",
             linestyle="--",
             label="Initial Cash",
-        )
+        )  # 初期資金の線を引く
 
-        # Buy & Hold (ポートフォリオ全体でのBuy & Holdは複雑なので、ここではプロットしないか、
-        # 特定の指標（例: 日経平均）と比較する形にする)
-        # 簡易的に、最初の銘柄のBuy & Holdを参考として表示
-        if "Close" in self.df.columns:
-            initial_close_price_for_buy_and_hold = self.df["Close"].iloc[0]
-            # もし、ポートフォリオ初期値と銘柄初期値に乖離がある場合は、適切なスケール調整が必要
-            buy_and_hold_portfolio_value_proxy = summary_results["initial_cash"] * (
-                self.df["Close"] / initial_close_price_for_buy_and_hold
-            )
-            ax1.plot(
-                self.df["Date"],
-                buy_and_hold_portfolio_value_proxy,
-                label="Reference (Buy & Hold of 1st Ticker)",
+        # 参照銘柄の株価（基準）をグラフに追加
+        if reference_ticker_data is not None and not reference_ticker_data.empty:
+            # reference_ticker_data に 'Close' 列があると仮定
+            # ポートフォリオ価値と同じスケールにするために正規化する
+            # 基準価格の初期値をポートフォリオの初期資金に合わせる
+            ref_initial_close = reference_ticker_data["Close"].iloc[0]
+            ref_scaled_value = (
+                reference_ticker_data["Close"] / ref_initial_close
+            ) * self.df_portfolio_history["Portfolio_Value"].iloc[0]
+            axes[0].plot(
+                reference_ticker_data["Date"],
+                ref_scaled_value,
+                label=f"Reference (Buy & Hold of {reference_ticker_data['Ticker'].iloc[0]})",
                 color="orange",
                 linestyle="--",
-                alpha=0.7,
             )
 
-        ax1.set_title(
-            f"Portfolio Value Trend (Leverage: {summary_results['leverage_ratio']}x)"
-        )
-        ax1.set_xlabel("Date")
-        ax1.set_ylabel("Portfolio Value (JPY)")
-        ax1.legend()
-        ax1.grid(True, linestyle="--", alpha=0.6)
+        axes[0].set_title("Portfolio Value Trend (Leverage: 3x)", fontsize=14)
+        axes[0].set_xlabel("Date", fontsize=12)
+        axes[0].set_ylabel("Portfolio Value (JPY)", fontsize=12)
+        axes[0].legend(fontsize=10)
+        axes[0].grid(True, linestyle=":", alpha=0.7)
+        axes[0].ticklabel_format(style="plain", axis="y")  # y軸の表記を通常の数値にする
 
-        # --- サブプロット2: 対象銘柄の株価とシグナル ---
-        # バックテストで使われた代表銘柄 (ここではデータフレームに結合された最初の銘柄) をプロット
-        ax2 = plt.subplot(
-            2, 1, 2, sharex=ax1
-        )  # 2行1列の2番目のサブプロット, x軸をax1と共有
-
-        if "Close" in self.df.columns and f"SMA_{SHORT_MA_PERIOD}" in self.df.columns:
-            ax2.plot(
-                self.df["Date"],
-                self.df["Close"],
-                label=f"{self.ticker_symbol if self.ticker_symbol else 'Stock'} Close Price",
+        # 2. 株価と取引シグナル
+        # 参照銘柄データが存在する場合のみ、その銘柄の株価とシグナルを表示
+        if reference_ticker_data is not None and not reference_ticker_data.empty:
+            axes[1].plot(
+                reference_ticker_data["Date"],
+                reference_ticker_data["Close"],
+                label=f"{reference_ticker_data['Ticker'].iloc[0]} Close Price",
                 color="gray",
-                alpha=0.7,
-            )
-            ax2.plot(
-                self.df["Date"],
-                self.df[f"SMA_{SHORT_MA_PERIOD}"],
-                label=f"SMA {SHORT_MA_PERIOD}",
-                color="blue",
-            )
-            ax2.plot(
-                self.df["Date"],
-                self.df[f"SMA_{LONG_MA_PERIOD}"],
-                label=f"SMA {LONG_MA_PERIOD}",
-                color="red",
+                alpha=0.8,
             )
 
-            # 売買シグナルをプロット (Trade_Signalが1の点が買い、-1の点が売り)
-            # Portoflio_Value DFにTrade_Signalがない場合があるので、元のDFから取得
-            buy_points = self.df[self.df["Trade_Signal"] == 1]
-            sell_points = self.df[self.df["Trade_Signal"] == -1]
+            # SMAラインを描画
+            if f"SMA_{SHORT_MA_PERIOD}" in reference_ticker_data.columns:
+                axes[1].plot(
+                    reference_ticker_data["Date"],
+                    reference_ticker_data[f"SMA_{SHORT_MA_PERIOD}"],
+                    label=f"SMA {SHORT_MA_PERIOD}",
+                    color="blue",
+                    linewidth=1.5,
+                )
+            if f"SMA_{LONG_MA_PERIOD}" in reference_ticker_data.columns:
+                axes[1].plot(
+                    reference_ticker_data["Date"],
+                    reference_ticker_data[f"SMA_{LONG_MA_PERIOD}"],
+                    label=f"SMA {LONG_MA_PERIOD}",
+                    color="red",
+                    linewidth=1.5,
+                )
 
-            ax2.scatter(
-                buy_points["Date"],
-                buy_points["Close"],
-                marker="^",
-                color="green",
-                s=100,
-                label="Buy Signal",
-                zorder=5,
+            # Buy/Sell シグナルを描画
+            buy_signals = df_trades[df_trades["Trade_Type"] == "BUY"]
+            sell_signals = df_trades[df_trades["Trade_Type"] == "SELL"]
+
+            # シグナルと参照銘柄のクローズ価格を結合し、表示
+            # 同じ日の取引シグナルがある場合、その日のクローズ価格を使用
+            # Buyシグナル
+            if not buy_signals.empty:
+                buy_plot_data = pd.merge(
+                    buy_signals,
+                    reference_ticker_data[["Date", "Close"]],
+                    on="Date",
+                    how="inner",
+                )
+                axes[1].scatter(
+                    buy_plot_data["Date"],
+                    buy_plot_data["Close"],
+                    marker="^",
+                    color="green",
+                    s=100,
+                    label="Buy Signal",
+                    alpha=1,
+                    zorder=5,
+                )
+
+            # Sellシグナル
+            if not sell_signals.empty:
+                sell_plot_data = pd.merge(
+                    sell_signals,
+                    reference_ticker_data[["Date", "Close"]],
+                    on="Date",
+                    how="inner",
+                )
+                axes[1].scatter(
+                    sell_plot_data["Date"],
+                    sell_plot_data["Close"],
+                    marker="v",
+                    color="red",
+                    s=100,
+                    label="Sell Signal",
+                    alpha=1,
+                    zorder=5,
+                )
+
+            axes[1].set_title(
+                f"Stock Price and Signals ({reference_ticker_data['Ticker'].iloc[0]})",
+                fontsize=14,
             )
-            ax2.scatter(
-                sell_points["Date"],
-                sell_points["Close"],
-                marker="v",
-                color="red",
-                s=100,
-                label="Sell Signal",
-                zorder=5,
-            )
+            axes[1].set_xlabel("Date", fontsize=12)
+            axes[1].set_ylabel("Stock Price (JPY)", fontsize=12)
+            axes[1].legend(fontsize=10)
+            axes[1].grid(True, linestyle=":", alpha=0.7)
+            axes[1].ticklabel_format(
+                style="plain", axis="y"
+            )  # y軸の表記を通常の数値にする
         else:
-            ax2.text(
+            axes[1].set_title(
+                "Stock Price and Signals (No reference data)", fontsize=14
+            )
+            axes[1].text(
                 0.5,
                 0.5,
-                "Stock Price & Signals data not available for plot.",
+                "No reference ticker data available for plotting signals.",
                 horizontalalignment="center",
                 verticalalignment="center",
-                transform=ax2.transAxes,
+                transform=axes[1].transAxes,
+                fontsize=12,
             )
+            axes[1].set_xlabel("Date", fontsize=12)
+            axes[1].set_ylabel("Stock Price (JPY)", fontsize=12)
 
-        ax2.set_title(
-            f"Stock Price and Signals ({self.ticker_symbol if self.ticker_symbol else 'Selected Ticker'})"
-        )
-        ax2.set_xlabel("Date")
-        ax2.set_ylabel("Stock Price (JPY)")
-        ax2.legend()
-        ax2.grid(True, linestyle="--", alpha=0.6)
+        plt.tight_layout(
+            rect=[0, 0.03, 1, 0.96]
+        )  # タイトルとサブプロットが重ならないように調整
+        plt.savefig(file_name, dpi=300)
 
-        plt.tight_layout()  # サブプロット間のスペースを調整
         plt.show()
-        print("グラフ描画完了。")
+
+        plt.close(fig)  # メモリ解放のために図を閉じる
