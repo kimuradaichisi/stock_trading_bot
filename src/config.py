@@ -1,37 +1,56 @@
 # stock_trading_bot/src/config.py
 
-import os
-from datetime import datetime, timedelta
-
-# --- 全体設定 ---
-# プロジェクトのルートディレクトリを基準としたパス
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 # --- データ設定 ---
-# データ保存先CSVファイル名 (yfinanceで取得したデータを保存)
-STOCK_DATA_FILE = os.path.join(BASE_DIR, "data", "stock_data.csv")
+# 株価データを保存するファイルパス (各銘柄は別途CSVとして保存される)
+STOCK_DATA_FILE = "data/stock_data.csv"
+# バックテストを行う銘柄のティッカーシンボルリスト (例: 日本株なら '9984.T', 米国株なら 'AAPL')
+TICKER_SYMBOLS = [
+    "NVDA"
+]  # 例: NVIDIAのティッカー。複数設定する場合は ['AAPL', 'MSFT', 'NVDA'] のように記述。
+# データ取得開始日 ('YYYY-MM-DD' 形式)
+START_DATE = "2024-01-01"
+# データ取得終了日 ('YYYY-MM-DD' 形式)
+END_DATE = "2025-06-07"  # 最新の日付に調整してください (今日の日付から少し前が安全)
 
-# yfinance で取得する銘柄と期間
-# 例: '9984.T' はソフトバンクグループ (東証)
-# 例: '^N225' は日経平均株価
-# 例: 'AAPL' はApple (米国)
-# 例: 'VOO' はS&P 500 ETF (米国)
-TICKER_SYMBOL = "9984.T"  # 取得したい銘柄のティッカーシンボルを指定
+# --- 戦略設定 (移動平均線 - SMA) ---
+# 短期移動平均線の期間
+SHORT_MA_PERIOD = 5
+# 長期移動平均線の期間
+LONG_MA_PERIOD = 20
 
-# データ取得期間 (YYYY-MM-DD)
-# 終了日は今日の1日前など、最新のデータが取れるように調整
-END_DATE = datetime.now().strftime("%Y-%m-%d")
-START_DATE = (datetime.now() - timedelta(days=365 * 3)).strftime(
-    "%Y-%m-%d"
-)  # 過去3年間のデータ
-
-# --- 戦略設定 (ゴールデンクロス/デッドクロス) ---
-SHORT_MA_PERIOD = 5  # 短期移動平均線の期間 (例: 5日)
-LONG_MA_PERIOD = 25  # 長期移動平均線の期間 (例: 25日)
+# --- 戦略設定 (RSI - Relative Strength Index) ---
+# RSIの計算期間
+RSI_PERIOD = 14
+# RSIの買われすぎ閾値
+RSI_OVERBOUGHT = 70
+# RSIの売られすぎ閾値
+RSI_OVERSOLD = 30
 
 # --- バックテスト設定 ---
-INITIAL_CASH = 1_000_000  # 初期保有現金 (例: 100万円)
+# 初期投資資金
+INITIAL_CASH = 1_000_000  # 100万円
+# 利用するレバレッジ倍率 (例: 1 はレバレッジなし、2 は2倍レバレッジ)
+LEVERAGE_RATIO = 3  # 半年で資金を5倍にする戦略を想定し、高めのレバレッジを設定
+
+# --- ウォークフォワード最適化設定 ---
+# パラメータ最適化に使用する過去データの期間 (日数)
+# 例: 180日 = 約半年分のデータで最適なMA期間などの組み合わせを見つける
+OPTIMIZATION_WINDOW_DAYS = 180
+# 最適化したパラメータを評価する期間 (日数)
+# 例: 次の30日 = 1ヶ月分のデータで、見つけたパラメータがどのくらい機能するかをテストする
+TEST_WINDOW_DAYS = 30
+# 最適化ウィンドウをずらす間隔 (日数)
+# 例: 30日 = 1ヶ月ごとにパラメータを再最適化し、次の1ヶ月をテストする
+WALK_FORWARD_STEP_DAYS = 30
+
+# 最適化するパラメータの探索範囲 (グリッドサーチ用)
+# 短期移動平均線の期間の探索範囲 (開始, 終了+1, ステップ)
+SMA_SHORT_RANGE = range(5, 26, 5)  # 例: 5, 10, 15, 20, 25
+# 長期移動平均線の期間の探索範囲 (開始, 終了+1, ステップ)
+SMA_LONG_RANGE = range(10, 61, 10)  # 例: 10, 20, 30, 40, 50, 60
 
 # --- 出力設定 ---
-# outputフォルダ内のExcelファイル名
-OUTPUT_EXCEL_FILE = os.path.join(BASE_DIR, "output", "trading_simulation_results.xlsx")
+# レポートファイル名
+REPORT_FILE_NAME = "trading_simulation_results.xlsx"
+# グラフファイル名
+PLOT_FILE_NAME = "portfolio_and_signals.png"
