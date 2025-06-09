@@ -1,64 +1,79 @@
 # stock_trading_bot/src/report_generator.py
 
+import os
+
 import pandas as pd
 
-from .config import LONG_MA_PERIOD, OUTPUT_EXCEL_FILE, SHORT_MA_PERIOD
+from .config import REPORT_FILE_NAME  # ここを修正
 
 
 class ReportGenerator:
-    def __init__(self, output_path=OUTPUT_EXCEL_FILE):
-        self.output_path = output_path
+    def __init__(self):
+        self.output_dir = "output"
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def generate_excel_report(
-        self, df_portfolio: pd.DataFrame, df_trades: pd.DataFrame, summary_results: dict
+        self,
+        portfolio_df: pd.DataFrame,
+        trade_history_df: pd.DataFrame,
+        summary_results: dict,
     ):
         """
-        シミュレーション結果をExcelファイルに出力します。
+        シミュレーション結果をExcelファイルとして出力します。
         """
-        print(f"Excelレポート生成中: {self.output_path}")
+        report_path = os.path.join(self.output_dir, REPORT_FILE_NAME)
+
         try:
-            with pd.ExcelWriter(self.output_path, engine="openpyxl") as writer:
-                # 総合結果シート
+            with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
+                # サマリーシート
                 summary_data = {
                     "項目": [
-                        "初期資産",
-                        "最終資産",
-                        "総リターン(%)",
-                        "Buy&Holdリターン(%)",
-                        "短期MA期間",
-                        "長期MA期間",
+                        "初期資金",
+                        "最終ポートフォリオ価値",
+                        "総リターン (%)",
+                        "利用レバレッジ",
                     ],
                     "値": [
-                        summary_results["initial_cash"],
-                        summary_results["final_portfolio_value"],
-                        summary_results["total_return_percentage"],
-                        summary_results["buy_and_hold_return_percentage"],
-                        SHORT_MA_PERIOD,
-                        LONG_MA_PERIOD,
+                        f"{summary_results['initial_cash']:,.0f} 円",
+                        f"{summary_results['final_portfolio_value']:,.0f} 円",
+                        f"{summary_results['total_return_percentage']:.2f} %",
+                        f"{summary_results['leverage_ratio']} 倍",
                     ],
                 }
-                summary_df = pd.DataFrame(summary_data)
-                summary_df.to_excel(writer, sheet_name="総合結果", index=False)
+                df_summary = pd.DataFrame(summary_data)
+                df_summary.to_excel(writer, sheet_name="Summary", index=False)
 
-                # ポートフォリオ推移シート
-                cols_to_export = [
-                    "Date",
-                    "Close",
-                    f"SMA_{SHORT_MA_PERIOD}",
-                    f"SMA_{LONG_MA_PERIOD}",
-                    "Portfolio_Value",
-                ]
-                df_portfolio[cols_to_export].to_excel(
-                    writer, sheet_name="ポートフォリオ推移", index=False
-                )
+                # ポートフォリオ履歴シート
+                if not portfolio_df.empty:
+                    # 日付列の表示形式を調整
+                    portfolio_df["Date"] = portfolio_df["Date"].dt.strftime("%Y-%m-%d")
+                    portfolio_df.to_excel(
+                        writer, sheet_name="Portfolio History", index=False
+                    )
+                else:
+                    empty_df = pd.DataFrame(
+                        {"Message": ["ポートフォリオ履歴データがありません。"]}
+                    )
+                    empty_df.to_excel(
+                        writer, sheet_name="Portfolio History", index=False
+                    )
 
                 # 取引履歴シート
-                if not df_trades.empty:
-                    df_trades.to_excel(writer, sheet_name="取引履歴", index=False)
+                if not trade_history_df.empty:
+                    # 日付列の表示形式を調整
+                    trade_history_df["Date"] = trade_history_df["Date"].dt.strftime(
+                        "%Y-%m-%d"
+                    )
+                    trade_history_df.to_excel(
+                        writer, sheet_name="Trade History", index=False
+                    )
                 else:
-                    empty_df = pd.DataFrame({"Note": ["取引は発生しませんでした。"]})
-                    empty_df.to_excel(writer, sheet_name="取引履歴", index=False)
+                    empty_df = pd.DataFrame(
+                        {"Message": ["取引履歴データがありません。"]}
+                    )
+                    empty_df.to_excel(writer, sheet_name="Trade History", index=False)
 
-            print(f"Excelレポートが '{self.output_path}' に出力されました。")
+            print(f"レポートを保存しました: {report_path}")
+
         except Exception as e:
-            print(f"Excel出力中にエラーが発生しました: {e}")
+            print(f"レポートの生成中にエラーが発生しました: {e}")

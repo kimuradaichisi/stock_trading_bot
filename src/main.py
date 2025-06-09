@@ -1,4 +1,4 @@
-# stock_trading_bot/src/main.py (抜粋 - メインロジックをウォークフォワードに)
+# stock_trading_bot/src/main.py
 
 from datetime import timedelta
 
@@ -7,20 +7,21 @@ import pandas as pd
 from .backtester import Backtester
 from .config import (
     END_DATE,
-    INITIAL_CASH,  # MA期間は初期値として残す
+    INITIAL_CASH,
     LEVERAGE_RATIO,
     LONG_MA_PERIOD,
-    OPTIMIZATION_WINDOW_DAYS,  # ウォークフォワード設定
+    OPTIMIZATION_WINDOW_DAYS,
+    PLOT_FILE_NAME,
     SHORT_MA_PERIOD,
     START_DATE,
     TEST_WINDOW_DAYS,
     TICKER_SYMBOLS,
     WALK_FORWARD_STEP_DAYS,
-    # 最適化範囲
 )
 from .data_manager import DataManager
 from .report_generator import ReportGenerator
 from .strategy_manager import StrategyManager
+from .visualizer import Visualizer
 
 
 def main():
@@ -44,29 +45,41 @@ def main():
         return
 
     # ウォークフォワードシミュレーションの結果を保存するためのリスト
-    all_walk_forward_results = []
-    all_walk_forward_trades = pd.DataFrame()
+    all_walk_forward_results = []  # 各テスト期間のサマリー結果
+    all_walk_forward_trades = pd.DataFrame()  # 全期間の統合された取引履歴
+    all_walk_forward_portfolio_dfs = []  # 各テスト期間のポートフォリオ推移DF
 
     # 最初の最適化開始日を決定
     # 最も古いデータがある銘柄の最初のOPTIMIZATION_WINDOW_DAYS分のデータが必要
-    min_date = min(
-        df["Date"].min() for df in raw_dfs.values() if df is not None and not df.empty
-    )
-    max_date = max(
-        df["Date"].max() for df in raw_dfs.values() if df is not None and not df.empty
-    )
+    # 有効なデータフレームのみを対象にする
+    valid_dfs_for_min_max_date = [
+        df for df in raw_dfs.values() if df is not None and not df.empty
+    ]
+    if not valid_dfs_for_min_max_date:
+        print("有効なデータが見つかりませんでした。終了します。")
+        return
+
+    min_date = min(df["Date"].min() for df in valid_dfs_for_min_max_date)
+    max_date = max(df["Date"].max() for df in valid_dfs_for_min_max_date)
 
     current_optimization_start_date = min_date
 
     # ウォークフォワードループ
     while True:
+        # ウォークフォワードのウィンドウを定義
         optimization_end_date = current_optimization_start_date + timedelta(
             days=OPTIMIZATION_WINDOW_DAYS
         )
-        test_end_date = optimization_end_date + timedelta(days=TEST_WINDOW_DAYS)
+        test_start_date = (
+            optimization_end_date  # テスト期間の開始日は最適化期間の終了日
+        )
+        test_end_date = test_start_date + timedelta(days=TEST_WINDOW_DAYS)
 
         # テスト期間が全データ期間を超過したら終了
-        if optimization_end_date > max_date or test_end_date > max_date:
+        # データがない期間で最適化・テストを試みないようにする
+        if (
+            optimization_end_date > max_date or test_start_date >= test_end_date
+        ):  # テスト期間が有効かどうかもチェック
             print("\nウォークフォワード最適化が全データ期間をカバーしました。")
             break
 
@@ -74,18 +87,20 @@ def main():
             f"\n--- ウォークフォワード期間: 最適化期間 [{current_optimization_start_date.strftime('%Y-%m-%d')} - {optimization_end_date.strftime('%Y-%m-%d')}] ---"
         )
         print(
-            f"--- テスト期間: [{optimization_end_date.strftime('%Y-%m-%d')} - {test_end_date.strftime('%Y-%m-%d')}] ---"
+            f"--- テスト期間: [{test_start_date.strftime('%Y-%m-%d')} - {test_end_date.strftime('%Y-%m-%d')}] ---"
         )
 
         # 各銘柄のデータを最適化期間とテスト期間に分割
         current_processed_dfs_for_optimization = {}
         current_processed_dfs_for_test = {}
 
+        # 生データに対して一度MA/RSIを計算し、それを期間で区切る
+        # これにより、最適化・テスト期間ごとに再度MA/RSIを計算する二重計算を防ぐ
+        full_processed_dfs = {}
         for ticker, df in raw_dfs.items():
             if df is None or df.empty:
                 continue
 
-            # 特徴量計算 (MA, RSI) - 全期間に対して一度に計算するのが効率的
             df_ma = data_manager.calculate_moving_averages(df.copy())
             if df_ma is None:
                 continue
@@ -93,18 +108,22 @@ def main():
             if df_final is None:
                 continue
 
+            # シグナル生成は、最適化後のパラメータでテスト期間に対してのみ実行するため、ここでは保留
+            full_processed_dfs[ticker] = df_final
+
+        for ticker, df_full_processed in full_processed_dfs.items():
             # 最適化期間のデータ
-            opt_df = df_final[
-                (df_final["Date"] >= current_optimization_start_date)
-                & (df_final["Date"] < optimization_end_date)
+            opt_df = df_full_processed[
+                (df_full_processed["Date"] >= current_optimization_start_date)
+                & (df_full_processed["Date"] < optimization_end_date)
             ].copy()
             if not opt_df.empty:
                 current_processed_dfs_for_optimization[ticker] = opt_df
 
             # テスト期間のデータ
-            test_df = df_final[
-                (df_final["Date"] >= optimization_end_date)
-                & (df_final["Date"] < test_end_date)
+            test_df = df_full_processed[
+                (df_full_processed["Date"] >= test_start_date)
+                & (df_full_processed["Date"] < test_end_date)
             ].copy()
             if not test_df.empty:
                 current_processed_dfs_for_test[ticker] = test_df
@@ -120,7 +139,7 @@ def main():
             continue
 
         # 最も有望な銘柄のデータを取得 (ここでは最適化期間の代表銘柄として最初の銘柄を使用)
-        # 実際には、この期間で最もパフォーマンスが良かった銘柄を選ぶ、等の工夫が必要
+        # より高度な戦略では、この期間で最もパフォーマンスが良かった銘柄を選ぶ、等の工夫が必要
         optimization_ticker = list(current_processed_dfs_for_optimization.keys())[0]
         df_for_optimization = current_processed_dfs_for_optimization[
             optimization_ticker
@@ -129,7 +148,7 @@ def main():
         # 1. パラメータ最適化 (最適化期間のデータを使用)
         # strategy_manager.optimize_strategy_parameters はあくまで簡易的なもの。
         # 本格的なバックテストロジック（バックテスタークラス）を呼び出して
-        # 最適化を実行するような構造にするべきですが、ここでは簡略化。
+        # 最適化を実行するような構造にするべきですが、ここでは簡略化しています。
         best_params = strategy_manager.optimize_strategy_parameters(df_for_optimization)
 
         if not best_params:
@@ -138,12 +157,7 @@ def main():
             continue
 
         # 最適化されたパラメータを元に、戦略マネージャーのシグナルを生成し直す
-        # ここでは、最適なMA期間をstrategy_managerが使用するように、configの値を一時的に変更
-        # または、generate_trading_signalsに直接パラメータを渡せるようにする
-
-        # 現在の簡易的な generate_trading_signals は config のグローバル変数を使っているので、
-        # ここで一時的に最適なパラメータを設定する
-        # （これはベストプラクティスではないが、現行コードの変更を最小限にするため）
+        # config のグローバル変数を一時的に変更する (ベストプラクティスではないが簡略化のため)
         import src.config
 
         src.config.SHORT_MA_PERIOD = best_params.get("short_ma", SHORT_MA_PERIOD)
@@ -152,18 +166,17 @@ def main():
 
         processed_dfs_for_test_with_optimized_params = {}
         for ticker, df_test_raw in current_processed_dfs_for_test.items():
-            # テスト期間のデータに、最適化されたパラメータでMAとRSIを再計算
-            df_test_ma = data_manager.calculate_moving_averages(
-                df_test_raw.copy()
-            )  # config変更後の値で計算
+            # テスト期間のデータに、最適化されたパラメータでMAとRSIを再計算 (config変更後の値で)
+            # 再計算は不要な場合があるが、パラメータ変更を反映させるために行っている
+            # 既にfull_processed_dfsで計算済みだが、その時点のconfig値なので、ここで再計算が必要
+            df_test_ma = data_manager.calculate_moving_averages(df_test_raw.copy())
             if df_test_ma is None:
                 continue
-            df_test_final = data_manager.calculate_rsi(
-                df_test_ma
-            )  # config変更後の値で計算
+            df_test_final = data_manager.calculate_rsi(df_test_ma)
             if df_test_final is None:
                 continue
 
+            # 最適化されたパラメータを反映したシグナルを生成
             df_test_signals = strategy_manager.generate_trading_signals(df_test_final)
             if df_test_signals is None:
                 continue
@@ -175,16 +188,13 @@ def main():
             continue
 
         # 2. テスト期間でバックテストを実行 (最適化されたパラメータを使用)
+        # 各ウォークフォワード期間で初期資産をリセットして評価（簡易化のため）
+        # 連続バックテストを行う場合は、前期間の最終資産を current_cash に引き継ぐ必要がある
         backtester = Backtester(
             processed_dfs_for_test_with_optimized_params,
             initial_cash=INITIAL_CASH,
             leverage_ratio=LEVERAGE_RATIO,
         )
-        # バックテストは、各ウォークフォワード期間の初めに初期資産をリセットして評価する
-        # もしくは、前の期間の最終資産を引き継ぐ「連続バックテスト」にするか、設計の選択肢がある
-        # 今回は簡易的に、各ウォークフォワード期間で初期資産100万円からのリターンを評価し、最終的に統合する。
-        # 連続バックテストにするには、Backtesterの初期資金を、前の期間の最終資金にする必要があります。
-        # (今回は簡易化のため、各期間で独立して評価し、最終結果で合計する)
 
         df_portfolio_current_test, df_trades_current_test = backtester.run_simulation()
 
@@ -200,6 +210,7 @@ def main():
         all_walk_forward_trades = pd.concat(
             [all_walk_forward_trades, df_trades_current_test], ignore_index=True
         )
+        all_walk_forward_portfolio_dfs.append(df_portfolio_current_test)
 
         # 次の最適化期間の開始日を設定
         current_optimization_start_date += timedelta(days=WALK_FORWARD_STEP_DAYS)
@@ -211,20 +222,28 @@ def main():
         return
 
     # 全期間を通した統合されたポートフォリオ価値を計算し、可視化
-    # これは複雑な処理になるため、ここでは簡易的に累積リターンを表示する
-    total_final_portfolio_value = INITIAL_CASH
-    for res in all_walk_forward_results:
-        # 各期間の最終リターンを初期資金に適用していく形で累積を計算
-        # ただし、各期間の初期資金がINITIAL_CASHで固定されている場合、この累積は単純な合計とは異なる
-        # 厳密なウォークフォワードでは、前の期間の最終資産が次の期間の初期資産となる
-        # 今回は、各期間の「総リターン(%)」を平均して、総合的な戦略の有効性を測る
+    # 各テスト期間のポートフォリオ履歴を結合して一つのDataFrameを作成
+    final_integrated_portfolio_df = pd.DataFrame()
+    if all_walk_forward_portfolio_dfs:
+        # 重複する日付の処理 (最新の値、または平均値など) を考慮し、日付でソートして結合
+        final_integrated_portfolio_df = (
+            pd.concat(all_walk_forward_portfolio_dfs)
+            .drop_duplicates(subset="Date", keep="last")
+            .sort_values(by="Date")
+            .reset_index(drop=True)
+        )
+    else:
+        print(
+            "統合されたポートフォリオ履歴データがありません。最終グラフ描画をスキップします。"
+        )
 
-        # 簡易的な総リターン計算 (各期間の平均リターン)
-        total_final_portfolio_value += (
-            res["final_portfolio_value"] - res["initial_cash"]
-        )  # 各期間の絶対利益/損失を合計
+    # 最終的なポートフォリオ価値の計算
+    total_final_portfolio_value = INITIAL_CASH  # 最初の初期資金から始める
+    if not final_integrated_portfolio_df.empty:
+        total_final_portfolio_value = final_integrated_portfolio_df[
+            "Portfolio_Value"
+        ].iloc[-1]
 
-    # 総リターンは、あくまで各期間の合計損益
     total_overall_return_percentage = (
         ((total_final_portfolio_value - INITIAL_CASH) / INITIAL_CASH) * 100
         if INITIAL_CASH != 0
@@ -239,10 +258,8 @@ def main():
     )
     print(f"初期資産 (各テスト期間ごと): {INITIAL_CASH:,.0f} 円")
     print(f"利用レバレッジ: {LEVERAGE_RATIO} 倍")
-    print(f"全期間の累積損益額: {(total_final_portfolio_value - INITIAL_CASH):,.0f} 円")
-    print(
-        f"全期間の平均リターン (%): {total_overall_return_percentage:.2f}% (これは各期間のリターンを単純合計したもので、厳密なポートフォリオ推移ではありません)"
-    )
+    print(f"全期間の最終ポートフォリオ価値: {total_final_portfolio_value:,.0f} 円")
+    print(f"全期間の総リターン (%): {total_overall_return_percentage:.2f}%")
     print("\n--- 注意 ---")
     print(
         "「半年で5倍」という目標は非常に高いリスクを伴い、本シミュレーションは極端な戦略に基づいています。"
@@ -252,15 +269,32 @@ def main():
     )
 
     # 統合された結果の可視化とレポート生成
-    # ウォークフォワードの場合、ポートフォリオ価値の推移グラフは各テスト期間をつなぎ合わせる形になる
-    # これはVisualizerで直接対応するのが難しいため、ここでは簡易的な出力のみに留める
+    print("グラフ描画中...")
+    visualizer = Visualizer()
 
-    # 簡易的なポートフォリオ推移グラフの生成 (テスト期間ごとのリターンを連結)
-    # 実際のグラフ描画は、各テスト期間のデータを統合したDataFrameを構築する必要がある
-    # ここでは、簡略化のため、全期間の取引履歴のみでプロットは省略するか、手動で統合する
+    # 基準となる銘柄のデータを取得 (参照用)
+    # 最初の銘柄の処理済みデータ（全期間）を可視化の基準とする
+    reference_ticker_df = None
+    if TICKER_SYMBOLS and TICKER_SYMBOLS[0] in raw_dfs:
+        temp_df = raw_dfs[TICKER_SYMBOLS[0]].copy()
+        temp_df = data_manager.calculate_moving_averages(temp_df)
+        if temp_df is not None:
+            temp_df = data_manager.calculate_rsi(temp_df)
+            if temp_df is not None:
+                # シグナルは最適化されたものではないが、グラフの基準として描画
+                reference_ticker_df = strategy_manager.generate_trading_signals(temp_df)
+                # 'Ticker' 列を追加（Visualizerで利用するため）
+                if reference_ticker_df is not None:
+                    reference_ticker_df["Ticker"] = TICKER_SYMBOLS[0]
 
-    # 全期間の取引履歴のみをレポートに出力
-    final_integrated_portfolio_df = pd.DataFrame()  # グラフ描画用には別途構築が必要
+    visualizer.plot_results(
+        final_integrated_portfolio_df,
+        all_walk_forward_trades,
+        PLOT_FILE_NAME,
+        reference_ticker_data=reference_ticker_df,
+    )
+
+    print("レポート生成中...")
     report_generator = ReportGenerator()
     report_generator.generate_excel_report(
         final_integrated_portfolio_df,

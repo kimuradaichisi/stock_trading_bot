@@ -1,8 +1,19 @@
-# .gitignore
-.venv/
-__pycache__/
-output/
+# Byte-code files
 *.pyc
-*.pyo
-*.pyd
-.DS_Store
+__pycache__/
+
+# IDE-related files
+.idea/
+.vscode/
+
+# Environment
+.venv/
+env/
+
+# Data files
+data/*.csv # これが全てのCSVを無視するなら、必要なCSVは別途管理が必要
+# or
+# data/
+
+# Output files
+output/
