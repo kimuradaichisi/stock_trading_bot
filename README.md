@@ -11,43 +11,53 @@
 
 ## 特徴
 
-* **複数銘柄対応**: `yfinance` ライブラリを使用して、複数のティッカーシンボル（株価コード）のデータを一括で取得・処理できます。
-* **テクニカル指標の計算**: 短期・長期移動平均線 (SMA) および相対力指数 (RSI) を自動で計算します。
-* **売買シグナル生成**: ゴールデンクロス、デッドクロス、RSIの買われすぎ・売られすぎといった複数のシグナルに基づいて、売買の判断を行います。
-* **レバレッジを考慮したバックテスト**: 初期資金、レバレッジ倍率を設定し、過去のデータに基づいて仮想取引シミュレーションを実行します。
-* **結果の可視化**: ポートフォリオ価値の推移、株価と売買シグナルをグラフで表示します。
-* **詳細レポート**: シミュレーションの概要、ポートフォリオ推移、取引履歴を Excel ファイルで出力します。
+*   **複数銘柄対応**: `yfinance` ライブラリを使用して、複数のティッカーシンボル（株価コード）のデータを一括で取得・処理できます。
+*   **テクニカル指標の計算**: 短期・長期移動平均線 (SMA) および相対力指数 (RSI) を自動で計算します。
+*   **売買シグナル生成**: ゴールデンクロス、デッドクロス、RSIの買われすぎ・売られすぎといった複数のシグナルに基づいて、売買の判断を行います。
+*   **レバレッジを考慮したバックテスト**: 初期資金、レバレッジ倍率を設定し、過去のデータに基づいて仮想取引シミュレーションを実行します。
+*   **結果の可視化**: ポートフォリオ価値の推移、株価と売買シグナルをグラフで表示します。
+*   **詳細レポート**: シミュレーションの概要、ポートフォリオ推移、取引履歴を Excel ファイルで出力します。
 
 ## 動作環境
 
-* Python 3.8以上 (推奨)
+*   Python 3.8以上 (推奨)
 
 ## 必要なライブラリ
 
 以下のライブラリをインストールしてください。
 
 ```bash
-pip install pandas yfinance matplotlib openpyxl
-````
+pip install pandas yfinance matplotlib openpyxl pytest ruff
+```
 
 ## プロジェクト構造
 
 ```
 stock_trading_bot/
+├── .clinerules              # コーディング規約と開発ルール
+├── .gitignore               # Git管理から除外するファイル
+├── LICENSE                  # MITライセンス情報
+├── memo.txt                 # メモファイル
+├── portfolio_and_signals.png # ポートフォリオとシグナルのサンプル画像
+├── README.md                # このREADMEファイル
 ├── src/
-│   ├── config.py             # シミュレーション設定（銘柄、期間、MA期間、レバレッジなど）
-│   ├── data_manager.py       # 株価データの取得（yfinance）、加工、テクニカル指標計算
-│   ├── strategy_manager.py   # 売買シグナル生成ロジック
-│   ├── backtester.py         # 仮想取引シミュレーションの実行、ポートフォリオ管理
-│   ├── visualizer.py         # シミュレーション結果のグラフ可視化
-│   ├── report_generator.py   # シミュレーション結果のExcelレポート出力
-│   └── main.py               # メインプログラム
-├── data/                     # 取得した株価データを保存するディレクトリ
+│   ├── config.py            # シミュレーション設定（銘柄、期間、MA期間、レバレッジなど）
+│   ├── data_manager.py      # 株価データの取得（yfinance）、加工、テクニカル指標計算
+│   ├── strategy_manager.py  # 売買シグナル生成ロジック
+│   ├── backtester.py        # 仮想取引シミュレーションの実行、ポートフォリオ管理
+│   ├── visualizer.py        # シミュレーション結果のグラフ可視化
+│   ├── report_generator.py  # シミュレーション結果のExcelレポート出力
+│   └── main.py              # メインプログラム
+├── data/                    # 取得した株価データを保存するディレクトリ
 │   └── (各銘柄のCSVファイル)
-├── output/                   # シミュレーション結果のレポートを保存するディレクトリ
+├── output/                  # シミュレーション結果のレポートとグラフを保存するディレクトリ
 │   └── trading_simulation_results.xlsx
-├── LICENSE                   # MITライセンス情報
-└── README.md                 # このREADMEファイル
+│   └── (グラフ画像ファイル)
+├── docs/                    # ドキュメントディレクトリ
+│   ├── backtester_plan.md   # バックテスターの計画書
+│   └── design.md            # 設計書
+└── tests/                   # テストコードを保存するディレクトリ
+    └── (テストファイル)
 ```
 
 ## 使い方
@@ -55,25 +65,22 @@ stock_trading_bot/
 1.  **プロジェクトのクローンまたはダウンロード**:
 
     ```bash
-    git clone [あなたのリポジトリのURL]
+    git clone https://github.com/your-username/stock_trading_bot.git
     cd stock_trading_bot
     ```
 
 2.  **必要なライブラリのインストール**:
-
-    ```bash
-    pip install pandas yfinance matplotlib openpyxl
-    ```
+    上記の「必要なライブラリ」セクションを参照し、インストールしてください。
 
 3.  **設定ファイルの編集**:
     `src/config.py` を開き、以下の設定を必要に応じて変更してください。
 
-      * `TICKER_SYMBOLS`: バックテストを行いたい株のティッカーシンボル（例: `['9984.T', 'AAPL', 'NVDA']`）。
-      * `START_DATE`, `END_DATE`: データ取得期間。
-      * `SHORT_MA_PERIOD`, `LONG_MA_PERIOD`: 移動平均線の期間。
-      * `RSI_PERIOD`, `RSI_OVERBOUGHT`, `RSI_OVERSOLD`: RSIの期間と閾値。
-      * `INITIAL_CASH`: 初期投資資金。
-      * `LEVERAGE_RATIO`: シミュレーションで利用するレバレッジ倍率。（例: `3` で3倍レバレッジ）
+    *   `TICKER_SYMBOLS`: バックテストを行いたい株のティッカーシンボル（例: `['9984.T', 'AAPL', 'NVDA']`）。
+    *   `START_DATE`, `END_DATE`: データ取得期間。
+    *   `SHORT_MA_PERIOD`, `LONG_MA_PERIOD`: 移動平均線の期間。
+    *   `RSI_PERIOD`, `RSI_OVERBOUGHT`, `RSI_OVERSOLD`: RSIの期間と閾値。
+    *   `INITIAL_CASH`: 初期投資資金。
+    *   `LEVERAGE_RATIO`: シミュレーションで利用するレバレッジ倍率。（例: `3` で3倍レバレッジ）
 
 4.  **シミュレーションの実行**:
     プロジェクトのルートディレクトリ (`stock_trading_bot/`) に移動し、以下のコマンドを実行します。
@@ -84,9 +91,27 @@ stock_trading_bot/
 
     実行後、`data/` ディレクトリに株価データが、`output/` ディレクトリにシミュレーション結果の Excel ファイルとグラフが出力されます。
 
+## 開発環境
+
+### コーディング規約
+
+本プロジェクトでは、[PEP8](https://peps.python.org/pep-0008/) に準拠しています。コードの自動整形には `ruff` を使用しています。
+
+```bash
+ruff check . --fix
+```
+
+### テスト
+
+テストは `tests/` ディレクトリに配置されており、`pytest` を使用して実行できます。
+
+```bash
+pytest
+```
+
 ## ライセンス
 
-このプロジェクトは [MIT License](https://www.google.com/search?q=LICENSE) の下で公開されています。詳細については `LICENSE` ファイルを参照してください。
+このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。詳細については `LICENSE` ファイルを参照してください。
 
 ## 貢献
 
