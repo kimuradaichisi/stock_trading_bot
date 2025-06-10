@@ -3,7 +3,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from .config import LONG_MA_PERIOD, SHORT_MA_PERIOD  # これらのインポートも必要
+from .config import STRATEGIES  # 修正
 
 
 class Visualizer:
@@ -80,19 +80,29 @@ class Visualizer:
             )
 
             # SMAラインを描画
-            if f"SMA_{SHORT_MA_PERIOD}" in reference_ticker_data.columns:
+            if (
+                f"SMA_{STRATEGIES['SMA_Strategy']['short_ma']}"
+                in reference_ticker_data.columns
+            ):  # 修正
                 axes[1].plot(
                     reference_ticker_data["Date"],
-                    reference_ticker_data[f"SMA_{SHORT_MA_PERIOD}"],
-                    label=f"SMA {SHORT_MA_PERIOD}",
+                    reference_ticker_data[
+                        f"SMA_{STRATEGIES['SMA_Strategy']['short_ma']}"
+                    ],  # 修正
+                    label=f"SMA {STRATEGIES['SMA_Strategy']['short_ma']}",  # 修正
                     color="blue",
                     linewidth=1.5,
                 )
-            if f"SMA_{LONG_MA_PERIOD}" in reference_ticker_data.columns:
+            if (
+                f"SMA_{STRATEGIES['SMA_Strategy']['long_ma']}"
+                in reference_ticker_data.columns
+            ):  # 修正
                 axes[1].plot(
                     reference_ticker_data["Date"],
-                    reference_ticker_data[f"SMA_{LONG_MA_PERIOD}"],
-                    label=f"SMA {LONG_MA_PERIOD}",
+                    reference_ticker_data[
+                        f"SMA_{STRATEGIES['SMA_Strategy']['long_ma']}"
+                    ],  # 修正
+                    label=f"SMA {STRATEGIES['SMA_Strategy']['long_ma']}",  # 修正
                     color="red",
                     linewidth=1.5,
                 )

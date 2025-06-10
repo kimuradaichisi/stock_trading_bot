@@ -9,11 +9,10 @@ from .config import (
     END_DATE,
     INITIAL_CASH,
     LEVERAGE_RATIO,
-    LONG_MA_PERIOD,
     OPTIMIZATION_WINDOW_DAYS,
     PLOT_FILE_NAME,
-    SHORT_MA_PERIOD,
     START_DATE,
+    STRATEGIES,
     TEST_WINDOW_DAYS,
     TICKER_SYMBOLS,
     WALK_FORWARD_STEP_DAYS,
@@ -184,7 +183,9 @@ def main():
         ]
 
         # 1. パラメータ最適化 (最適化期間のデータを使用)
-        best_params = strategy_manager.optimize_strategy_parameters(df_for_optimization)
+        best_params = strategy_manager.optimize_strategy_parameters(
+            df_for_optimization, "SMA_Strategy"
+        )
 
         if not best_params:
             print("パラメータ最適化に失敗しました。スキップします。")
@@ -195,8 +196,14 @@ def main():
         # config のグローバル変数を一時的に変更する (ベストプラクティスではないが簡略化のため)
         import src.config
 
-        src.config.SHORT_MA_PERIOD = best_params.get("short_ma", SHORT_MA_PERIOD)
-        src.config.LONG_MA_PERIOD = best_params.get("long_ma", LONG_MA_PERIOD)
+        # config のグローバル変数を一時的に変更する (ベストプラクティスではないが簡略化のため)
+        # STRATEGIES ディクショナリからデフォルト値を取得するように変更
+        src.config.STRATEGIES["SMA_Strategy"]["short_ma"] = best_params.get(
+            "short_ma", STRATEGIES["SMA_Strategy"]["short_ma"]
+        )
+        src.config.STRATEGIES["SMA_Strategy"]["long_ma"] = best_params.get(
+            "long_ma", STRATEGIES["SMA_Strategy"]["long_ma"]
+        )
         # 必要なら RSI_OVERBOUGHT, RSI_OVERSOLD も同様に設定
 
         processed_dfs_for_test_with_optimized_params = {}
@@ -246,7 +253,7 @@ def main():
 
             # シグナル生成
             df_test_signals = strategy_manager.generate_trading_signals(
-                df_recalculated_final
+                df_recalculated_final, "SMA_Strategy", best_params
             )
             if df_test_signals is None or df_test_signals.empty:
                 print(
@@ -266,6 +273,7 @@ def main():
 
         backtester = Backtester(
             processed_dfs_for_test_with_optimized_params,
+            strategy_name="SMA_Strategy",  # 追加
             initial_cash=INITIAL_CASH,
             leverage_ratio=LEVERAGE_RATIO,
         )
@@ -372,7 +380,9 @@ def main():
                 )
 
                 temp_df.reset_index(inplace=True)
-                reference_ticker_df = strategy_manager.generate_trading_signals(temp_df)
+                reference_ticker_df = strategy_manager.generate_trading_signals(
+                    temp_df, "SMA_Strategy", STRATEGIES["SMA_Strategy"]
+                )
                 if reference_ticker_df is not None:
                     reference_ticker_df["Ticker"] = TICKER_SYMBOLS[0]
                 else:

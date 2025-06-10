@@ -17,19 +17,20 @@ START_DATE = "2015-01-01"  # より長い期間に設定
 # データ取得終了日 ('YYYY-MM-DD' 形式)
 END_DATE = "2025-06-07"  # 最新の日付に調整
 
-# --- 戦略設定 (移動平均線 - SMA) ---
-# 短期移動平均線の期間 (これは最適化範囲で上書きされるため、デフォルト値のようなもの)
-SHORT_MA_PERIOD = 5
-# 長期移動平均線の期間 (これも最適化範囲で上書きされるため、デフォルト値のようなもの)
-LONG_MA_PERIOD = 20
-
-# --- 戦略設定 (RSI - Relative Strength Index) ---
-# RSIの計算期間
-RSI_PERIOD = 14
-# RSIの買われすぎ閾値
-RSI_OVERBOUGHT = 70
-# RSIの売られすぎ閾値
-RSI_OVERSOLD = 30
+# --- 戦略設定 ---
+# 複数の戦略とそのデフォルトパラメータを定義
+STRATEGIES = {
+    "SMA_Strategy": {
+        "short_ma": 5,  # 短期移動平均線の期間
+        "long_ma": 20,  # 長期移動平均線の期間
+    },
+    "RSI_Strategy": {
+        "rsi_period": 14,  # RSIの計算期間
+        "rsi_overbought": 70,  # RSIの買われすぎ閾値
+        "rsi_oversold": 30,  # RSIの売られすぎ閾値
+    },
+    # 必要に応じて他の戦略を追加
+}
 
 # --- バックテスト設定 ---
 # 初期投資資金

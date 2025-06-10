@@ -7,7 +7,7 @@ import pandas as pd
 import yfinance as yf
 
 # ★ここを修正/追加★
-from .config import LONG_MA_PERIOD, RSI_PERIOD, SHORT_MA_PERIOD
+from .config import STRATEGIES  # 修正
 
 # ★ここまで修正/追加★
 
@@ -109,8 +109,8 @@ class DataManager:
             return None
 
         df_copy = df.copy()
-        sma_short_col = f"SMA_{SHORT_MA_PERIOD}"
-        sma_long_col = f"SMA_{LONG_MA_PERIOD}"
+        sma_short_col = f"SMA_{STRATEGIES['SMA_Strategy']['short_ma']}"  # 修正
+        sma_long_col = f"SMA_{STRATEGIES['SMA_Strategy']['long_ma']}"  # 修正
 
         print(
             f"\n--- MA計算デバッグ: DataFrameサイズ={len(df_copy)}, 列={df_copy.columns.tolist()} ---"
@@ -122,10 +122,14 @@ class DataManager:
 
         # 計算を実行
         df_copy[sma_short_col] = (
-            df_copy["Close"].rolling(window=SHORT_MA_PERIOD, min_periods=1).mean()
+            df_copy["Close"]
+            .rolling(window=STRATEGIES["SMA_Strategy"]["short_ma"], min_periods=1)
+            .mean()  # 修正
         )
         df_copy[sma_long_col] = (
-            df_copy["Close"].rolling(window=LONG_MA_PERIOD, min_periods=1).mean()
+            df_copy["Close"]
+            .rolling(window=STRATEGIES["SMA_Strategy"]["long_ma"], min_periods=1)
+            .mean()  # 修正
         )
 
         print(
@@ -194,8 +198,12 @@ class DataManager:
         loss = -delta.where(delta < 0, 0)
 
         # ここで RSI_PERIOD が定義されていないというエラーが出ていました
-        avg_gain = gain.rolling(window=RSI_PERIOD, min_periods=1).mean()
-        avg_loss = loss.rolling(window=RSI_PERIOD, min_periods=1).mean()
+        avg_gain = gain.rolling(
+            window=STRATEGIES["RSI_Strategy"]["rsi_period"], min_periods=1
+        ).mean()  # 修正
+        avg_loss = loss.rolling(
+            window=STRATEGIES["RSI_Strategy"]["rsi_period"], min_periods=1
+        ).mean()  # 修正
 
         rs = avg_gain / avg_loss.replace(0, np.nan)
         df_copy["RSI"] = 100 - (100 / (1 + rs))

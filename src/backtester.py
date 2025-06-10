@@ -9,12 +9,14 @@ class Backtester:
     def __init__(
         self,
         processed_dfs: dict,
+        strategy_name: str,  # 新しく追加
         initial_cash: float = INITIAL_CASH,
         leverage_ratio: float = LEVERAGE_RATIO,
     ):
         self.processed_dfs = (
             processed_dfs  # 各銘柄の処理済みデータフレーム (シグナル付き)
         )
+        self.strategy_name = strategy_name  # 戦略名を保持
         self.initial_cash = initial_cash
         self.current_cash = initial_cash
         self.leverage_ratio = leverage_ratio
@@ -23,7 +25,6 @@ class Backtester:
         self.shares_held = {ticker: 0 for ticker in processed_dfs.keys()}
         self.bought_price = {ticker: 0 for ticker in processed_dfs.keys()}
 
-        self.portfolio_values = []  # 各日のポートフォリオ価値を記録
         self.trade_history = []  # 取引履歴を記録
 
         # 全銘柄のデータを統合した日付リスト (最も短い期間に合わせる)
@@ -37,21 +38,22 @@ class Backtester:
             self.dates = []
             return
 
-        # 各データフレームの 'Date' 列がインデックスであることを確認し、DatetimeIndexに変換（既に変換されていることを想定しているが念のため）
+        # 各データフレームの 'Date' 列がインデックスであることを確認し、DatetimeIndexに変換
         for df in valid_dfs:
-            # main.py で df.reset_index() してから backtester に渡されるため、df['Date'] が存在し、
-            # インデックスはデフォルトの RangeIndex になっている可能性が高い
             if "Date" not in df.columns:
                 print(
                     "警告: バックテスター初期化: データフレームに 'Date' 列が見つかりません。"
                 )
-                # ここで処理を中断するか、エラーを発生させる
                 self.dates = []
                 return
-            df["Date"] = pd.to_datetime(df["Date"])
-            df.set_index(
-                "Date", inplace=True
-            )  # Backtester内部ではDateをインデックスにする
+
+            # 'Date' 列が既にDatetime型でない場合のみ変換
+            if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
+                df["Date"] = pd.to_datetime(df["Date"])
+
+            # 'Date' 列がインデックスでない場合のみ設定
+            if not isinstance(df.index, pd.DatetimeIndex) or "Date" in df.index.name:
+                df.set_index("Date", inplace=True)
             df.sort_index(inplace=True)  # インデックスでソートされていることを確認
 
         # 全ての有効なDFに存在する日付の共通集合を取得
@@ -73,11 +75,18 @@ class Backtester:
             return
 
         # ポートフォリオ履歴DataFrameを初期化
-        self.portfolio_history_df = pd.DataFrame(columns=["Date", "Portfolio_Value"])
+        self.portfolio_history_df = pd.DataFrame(
+            columns=["Date", "Portfolio_Value", "Strategy"]
+        )  # 'Strategy' 列を追加
 
     def _get_current_portfolio_value(self, current_prices: dict) -> float:
-        """
-        現在のポートフォリオの総価値を計算します。
+        """現在のポートフォリオの総価値を計算します。
+
+        Args:
+            current_prices (dict): 各銘柄の現在価格を格納した辞書。
+
+        Returns:
+            float: 現在のポートフォリオの総価値。
         """
         holding_value = sum(
             self.shares_held[ticker] * current_prices.get(ticker, 0)
@@ -86,8 +95,10 @@ class Backtester:
         return self.current_cash + holding_value
 
     def run_simulation(self):
-        """
-        シミュレーションを実行し、ポートフォリオの推移と取引履歴を記録します。
+        """シミュレーションを実行し、ポートフォリオの推移と取引履歴を記録します。
+
+        Returns:
+            tuple[pd.DataFrame, pd.DataFrame]: ポートフォリオ履歴DataFrameと取引履歴DataFrame。
         """
         if not self.dates:
             print("エラー: シミュレーション実行のためのデータがありません。")
@@ -96,6 +107,8 @@ class Backtester:
         print(
             f"バックテスト期間: {self.dates[0].strftime('%Y-%m-%d')} から {self.dates[-1].strftime('%Y-%m-%d')}"
         )
+
+        portfolio_records = []  # ポートフォリオ履歴を一時的に保持するリスト
 
         for i, current_date in enumerate(self.dates):
             current_prices = {}
@@ -163,7 +176,7 @@ class Backtester:
                                     {
                                         "Date": current_date,
                                         "Ticker": ticker,
-                                        "Trade_Type": "BUY",  # ★ここを修正★ "Action" -> "Trade_Type"
+                                        "Trade_Type": "BUY",
                                         "Price": current_price,
                                         "Shares": shares_to_buy,
                                         "Cash_Left": self.current_cash,
@@ -193,7 +206,7 @@ class Backtester:
                             {
                                 "Date": current_date,
                                 "Ticker": ticker,
-                                "Trade_Type": "SELL",  # ★ここを修正★ "Action" -> "Trade_Type"
+                                "Trade_Type": "SELL",
                                 "Price": current_price,
                                 "Shares": self.shares_held[ticker],  # 売却後の保有数
                                 "Cash_Left": self.current_cash,
@@ -205,22 +218,16 @@ class Backtester:
 
             # 各日のポートフォリオ価値を記録
             current_portfolio_value = self._get_current_portfolio_value(current_prices)
-            # ポートフォリオヒストリーDFに追加
-            self.portfolio_history_df = pd.concat(
-                [
-                    self.portfolio_history_df,
-                    # 'Date' 列を直接追加するためにDataFrameを作成
-                    pd.DataFrame(
-                        [
-                            {
-                                "Date": current_date,
-                                "Portfolio_Value": current_portfolio_value,
-                            }
-                        ]
-                    ),
-                ],
-                ignore_index=True,
+            # 一時的なリストにレコードを追加
+            portfolio_records.append(
+                {
+                    "Date": current_date,
+                    "Portfolio_Value": current_portfolio_value,
+                    "Strategy": self.strategy_name,  # 戦略名を追加
+                }
             )
+        # ループ終了後、一度にDataFrameに変換
+        self.portfolio_history_df = pd.DataFrame(portfolio_records)
 
         # 最終日のポートフォリオ価値を更新
         if not self.portfolio_history_df.empty:
@@ -258,8 +265,10 @@ class Backtester:
         return self.portfolio_history_df, df_trade_history
 
     def get_summary_results(self) -> dict:
-        """
-        シミュレーションの最終結果を要約して返します。
+        """シミュレーションの最終結果を要約して返します。
+
+        Returns:
+            dict: シミュレーションの要約結果を含む辞書。
         """
         # 最終ポートフォリオ価値
         if not self.portfolio_history_df.empty:
@@ -277,6 +286,7 @@ class Backtester:
         )
 
         return {
+            "strategy_name": self.strategy_name,  # 戦略名を追加
             "initial_cash": self.initial_cash,
             "final_portfolio_value": final_portfolio_value,
             "total_return_percentage": total_return_percentage,
